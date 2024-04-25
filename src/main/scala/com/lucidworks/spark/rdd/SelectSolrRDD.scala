@@ -3,10 +3,10 @@ package com.lucidworks.spark.rdd
 import com.lucidworks.spark.query.StreamingResultsIterator
 import com.lucidworks.spark.util.QueryConstants._
 import com.lucidworks.spark.util.{SolrQuerySupport, SolrSupport}
-import com.lucidworks.spark.{SelectSolrRDDPartition, SolrLimitPartition, SolrPartitioner, SparkSolrAccumulator}
-import com.typesafe.scalalogging.LazyLogging
+import com.lucidworks.spark._
 import org.apache.solr.client.solrj.SolrQuery
 import org.apache.solr.common.SolrDocument
+import org.apache.solr.common.params.ShardParams
 import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.{Partition, SparkContext, TaskContext}
 
@@ -54,7 +54,7 @@ class SelectSolrRDD(
         query.setRequestHandler(solrRequestHandler)
         logger.debug(s"Using cursorMarks to fetch documents from ${partition.preferredReplica} for query: ${partition.query}")
         val resultsIterator = new StreamingResultsIterator(SolrSupport.getCachedHttpSolrClient(url, zkHost), partition.query, partition.cursorMark)
-        context.addTaskCompletionListener { (context) =>
+        context.addTaskCompletionListener[Unit] { (context) =>
           logger.info(f"Fetched ${resultsIterator.getNumDocs} rows from shard $url for partition ${split.index}")
         }
         resultsIterator
@@ -69,7 +69,7 @@ class SelectSolrRDD(
         query.setStart(null) // important! must start as null else the Iterator will advance the start position by the row size
         val resultsIterator = new StreamingResultsIterator(SolrSupport.getCachedCloudClient(p.zkhost), query)
         resultsIterator.setMaxSampleDocs(p.maxRows)
-        context.addTaskCompletionListener { (context) =>
+        context.addTaskCompletionListener[Unit] { (context) =>
           logger.info(f"Fetched ${resultsIterator.getNumDocs} rows from the limit (${p.maxRows}) partition of ${p.collection}")
         }
         resultsIterator
@@ -90,34 +90,41 @@ class SelectSolrRDD(
       return Array(SolrLimitPartition(0, zkHost, collection, maxRows.get, query))
     }
 
-    val shards = SolrSupport.buildShardList(zkHost, collection)
-    logger.info(s"rq = $rq, setting query defaults for query = $query uniqueKey = $uniqueKey")
+    val shardsTolerant : Boolean =
+      if (query.get(ShardParams.SHARDS_TOLERANT) != null)
+        query.get(ShardParams.SHARDS_TOLERANT).toBoolean
+      else
+        false
+    val shards = SolrSupport.buildShardList(zkHost, collection, shardsTolerant)
+    val numReplicas = shards.head.replicas.length
+    val numSplits = splitsPerShard.getOrElse(calculateSplitsPerShard(query, shards.size, numReplicas))
+
+    logger.debug(s"rq = $rq, setting query defaults for query = $query uniqueKey = $uniqueKey")
     SolrQuerySupport.setQueryDefaultsForShards(query, uniqueKey)
     // Freeze the index by adding a filter query on _version_ field
     val max = SolrQuerySupport.getMaxVersion(SolrSupport.getCachedCloudClient(zkHost), collection, query, DEFAULT_SPLIT_FIELD)
     if (max.isDefined) {
       val rangeFilter = DEFAULT_SPLIT_FIELD + ":[* TO " + max.get + "]"
-      logger.info("Range filter added to the query: " + rangeFilter)
+      logger.debug("Range filter added to the query: " + rangeFilter)
       query.addFilterQuery(rangeFilter)
     }
 
-    val numReplicas = shards.head.replicas.length
-    val numSplits = splitsPerShard.getOrElse(4 * numReplicas)
-    logger.info(s"Using splitField=$splitField, splitsPerShard=$splitsPerShard, and numReplicas=$numReplicas for computing partitions.")
+    logger.debug(s"Using splitField=$splitField, splitsPerShard=$splitsPerShard, and numReplicas=$numReplicas for computing partitions.")
 
+    logger.info(s"Updated Solr query: ${query.toString}")
     val partitions : Array[Partition] = if (numSplits > 1) {
       val splitFieldName = splitField.getOrElse(DEFAULT_SPLIT_FIELD)
-      logger.info(s"Applied $numSplits intra-shard splits on the $splitFieldName field for $collection to better utilize all active replicas. Set the 'split_field' option to override this behavior or set the 'splits_per_shard' option = 1 to disable splits per shard.")
+      logger.debug(s"Applied $numSplits intra-shard splits on the $splitFieldName field for $collection to better utilize all active replicas. Set the 'split_field' option to override this behavior or set the 'splits_per_shard' option = 1 to disable splits per shard.")
       SolrPartitioner.getSplitPartitions(shards, query, splitFieldName, numSplits)
     } else {
       // no explicit split field and only one replica || splits_per_shard was explicitly set to 1, no intra-shard splitting needed
       SolrPartitioner.getShardPartitions(shards, query)
     }
 
-    if (logger.underlying.isDebugEnabled) {
-      logger.debug(s"Found ${partitions.length} partitions: ${partitions.mkString(",")}")
+    if (logger.underlying.isTraceEnabled()) {
+      logger.trace(s"Found ${partitions.length} partitions: ${partitions.mkString(",")}")
     } else {
-      logger.info(s"Found ${partitions.length} partitions.")
+      logger.info(s"Found ${partitions.length} partitions")
     }
     partitions
   }
@@ -142,7 +149,7 @@ class SelectSolrRDD(
 
   override def buildQuery: SolrQuery = {
     var solrQuery : SolrQuery = SolrQuerySupport.toQuery(query.get)
-    if (!solrQuery.getFields.eq(null) && solrQuery.getFields.length > 0) {
+    if (!solrQuery.getFields.eq(null) && solrQuery.getFields.nonEmpty) {
       solrQuery = solrQuery.setFields(fields.getOrElse(Array.empty[String]):_*)
     }
     if (!solrQuery.getRows.eq(null) && rows.isDefined) {

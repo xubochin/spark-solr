@@ -19,7 +19,6 @@ package com.lucidworks.spark.analysis
 
 import java.io.{PrintWriter, Reader, StringWriter}
 import java.util.regex.Pattern
-
 import com.lucidworks.spark.util.Utils
 import org.apache.commons.io.IOUtils
 import org.apache.lucene.analysis.custom.CustomAnalyzer
@@ -30,9 +29,11 @@ import org.apache.solr.schema.JsonPreAnalyzedParser
 import org.json4s.jackson.JsonMethods._
 import org.json4s.jackson.Serialization
 
-import scala.collection.JavaConversions._
+import scala.collection.convert.ImplicitConversions.`list asScalaBuffer`
 import scala.collection.immutable
 import scala.collection.mutable
+import scala.collection.JavaConverters._
+import scala.collection.convert.ImplicitConversions._
 import scala.util.control.Breaks._
 import scala.util.control.NonFatal
 
@@ -44,7 +45,7 @@ import scala.util.control.NonFatal
   * Here's an example schema with descriptions inline as comments:
   * {{{
   * {
-  *   "defaultLuceneMatchVersion": "5.0.0" // Optional.  Supplied to analysis components
+  *   "defaultLuceneMatchVersion": "7.0.0" // Optional.  Supplied to analysis components
   *                                         //     that don't explicitly specify "luceneMatchVersion".
   *   "analyzers": [              // Optional.  If not included, all field mappings must be
   *     {                         //     to fully qualified class names of Lucene Analyzer subclasses.
@@ -88,6 +89,20 @@ class LuceneTextAnalyzer(analysisSchema: String) extends Serializable {
   def invalidMessages: String = analyzerSchema.invalidMessages.result()
   /** Returns the analyzer mapped to the given field in the configured analysis schema, if any. */
   def getFieldAnalyzer(field: String): Option[Analyzer] = analyzerSchema.getAnalyzer(field)
+
+  def analyze(field: String, o: Any): Seq[String] = {
+    o match {
+      case s: String => analyze(field, s)
+      case as: mutable.WrappedArray[String] @unchecked => analyzeMV(field, as)
+      case a: Any => analyze(field, a.toString)
+      case _ => Seq.empty[String]
+    }
+  }
+
+  def analyzeJava(field: String, o: Any): java.util.List[String] = {
+    seqAsJavaList(analyze(field, o))
+  }
+
   /** Looks up the analyzer mapped to the given field from the configured analysis schema,
     * uses it to perform analysis on the given string, returning the produced token sequence.
     */
@@ -174,8 +189,6 @@ class LuceneTextAnalyzer(analysisSchema: String) extends Serializable {
     for ((field, values) <- fieldValues) output.put(field, analyzeMVJava(field, values))
     java.util.Collections.unmodifiableMap(output)
   }
-  /** Looks up the analyzer mapped to `fieldName` and returns a [[org.apache.lucene.analysis.TokenStream]]
-    * for the analyzer to tokenize the contents of `text`. */
   def tokenStream(fieldName: String, text: String) = analyzerWrapper.tokenStream(fieldName, text)
   /** Looks up the analyzer mapped to `fieldName` and returns a [[org.apache.lucene.analysis.TokenStream]]
     * for the analyzer to tokenize the contents of `reader`. */
@@ -299,11 +312,11 @@ private class AnalyzerSchema(val analysisSchema: String) {
   var invalidMessages : StringBuilder = new StringBuilder()
   try {
     schemaConfig.defaultLuceneMatchVersion.foreach { version =>
-      if ( ! LuceneVersion.parseLeniently(version).onOrAfter(LuceneVersion.LUCENE_5_0_0)) {
+      if ( ! LuceneVersion.parseLeniently(version).onOrAfter(LuceneVersion.LUCENE_7_0_0)) {
         isValid = false
         invalidMessages.append(
           s"""defaultLuceneMatchVersion "${schemaConfig.defaultLuceneMatchVersion}"""")
-          .append(" is not on or after ").append(LuceneVersion.LUCENE_5_0_0).append("\n")
+          .append(" is not on or after ").append(LuceneVersion.LUCENE_7_0_0).append("\n")
       }
     }
   } catch {

@@ -3,14 +3,15 @@ package com.lucidworks.spark.util
 import java.net.URLDecoder
 import java.sql.Timestamp
 import java.util
-import java.util.{Collections, Date}
+import java.util.Date
 
+import com.lucidworks.spark.LazyLogging
 import com.lucidworks.spark.rdd.{SelectSolrRDD, StreamingSolrRDD}
-import com.typesafe.scalalogging.LazyLogging
 import org.apache.solr.client.solrj.request.GenericSolrRequest
+import org.apache.solr.client.solrj.request.RequestWriter.StringPayloadContentWriter
 import org.apache.solr.client.solrj.{SolrQuery, SolrRequest}
 import org.apache.solr.common.SolrDocument
-import org.apache.solr.common.util.ContentStreamBase
+import org.apache.solr.common.params.CommonParams
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.Row
 import org.apache.spark.sql.sources._
@@ -18,7 +19,7 @@ import org.apache.spark.sql.types._
 import org.joda.time.DateTime
 import org.joda.time.format.ISODateTimeFormat
 
-import scala.collection.JavaConversions._
+import scala.collection.convert.ImplicitConversions._
 import scala.collection.mutable
 import scala.collection.mutable.ListBuffer
 
@@ -30,12 +31,9 @@ case class QueryField(name:String, alias: Option[String] = None, funcReturnType:
 
 object SolrRelationUtil extends LazyLogging {
 
-  val dynamicExtensionSuffixes = mutable.Seq("_i", "_s", "_l", "_b", "_f",
-    "_d", "_tdt", "_tdts", "_ss", "_ii", "_txt", "_txt_en", "_ls", "_t").seq
-
-  def isValidDynamicFieldName(fieldName: String): Boolean = {
+  def isValidDynamicFieldName(fieldName: String, dynamicExtensionSuffixes: Set[String]): Boolean = {
     dynamicExtensionSuffixes.foreach(ext => {
-      if (fieldName.endsWith(ext)) return true
+      if (fieldName.startsWith(ext) || fieldName.endsWith(ext)) return true
     })
     false
   }
@@ -57,7 +55,10 @@ object SolrRelationUtil extends LazyLogging {
             funcReturnType = Some(LongType)
           }
           logger.debug(s"Found a Solr function query: ${field} with return type: ${funcReturnType}")
+        } else if (field.equals("score")) { //Support the "score" pseudo-field as a double
+          funcReturnType = Some(DoubleType)
         }
+
         QueryField(URLDecoder.decode(field, "UTF-8"), Some(alias), funcReturnType)
       } else {
         QueryField(f)
@@ -68,40 +69,46 @@ object SolrRelationUtil extends LazyLogging {
   def getBaseSchema(
       zkHost: String,
       collection: String,
+      numShardsToSample: Option[Int],
       escapeFields: Boolean,
-      flattenMultivalued: Boolean,
-      skipNonDocValueFields: Boolean): StructType =
-    getBaseSchema(Set.empty[String], zkHost, collection, escapeFields, flattenMultivalued, skipNonDocValueFields)
+      flattenMultivalued: Option[Boolean],
+      skipNonDocValueFields: Boolean,
+      dynamicExtensions: Set[String]): StructType =
+    getBaseSchema(Set.empty[String], zkHost, collection, numShardsToSample, escapeFields, flattenMultivalued, skipNonDocValueFields, dynamicExtensions)
 
   def getBaseSchema(
       fields: Set[String],
       zkHost: String,
       collection: String,
+      numShardsToSample: Option[Int],
       escapeFields: Boolean,
-      flattenMultivalued: Boolean,
-      skipNonDocValueFields: Boolean): StructType = {
+      flattenMultivalued: Option[Boolean],
+      skipNonDocValueFields: Boolean,
+      dynamicExtensions: Set[String]): StructType = {
     // If the collection is empty (no documents), return an empty schema
     if (SolrQuerySupport.getNumDocsFromSolr(collection, zkHost, None) == 0)
       return new StructType()
 
+    val cloudClient = SolrSupport.getCachedCloudClient(zkHost)
     val solrBaseUrl = SolrSupport.getSolrBaseUrl(zkHost)
     val solrUrl = solrBaseUrl + collection + "/"
-    val fieldsFromLuke = SolrQuerySupport.getFieldsFromLuke(zkHost, collection)
-    logger.debug("Fields from luke handler: {}", fieldsFromLuke.mkString(","))
-    if (fieldsFromLuke.isEmpty)
-      return new StructType()
-
-    val cloudClient = SolrSupport.getCachedCloudClient(zkHost)
     val fieldTypeMap =
-      if (fields.isEmpty)
-        SolrQuerySupport.getFieldTypes(fieldsFromLuke, solrUrl, cloudClient, collection)
-      else
+      if (fields.isEmpty) {
+        val fieldsFromLuke = SolrQuerySupport.getFieldsFromLuke(zkHost, collection, numShardsToSample)
+        logger.debug("Fields from luke handler: {}", fieldsFromLuke.mkString(","))
+        if (fieldsFromLuke.isEmpty)
+          return new StructType()
+        // Retain the keys that are present in the Luke handler
+        SolrQuerySupport.getFieldTypes(fieldsFromLuke, solrUrl, cloudClient, collection).filterKeys(fieldsFromLuke.contains)
+      } else {
         SolrQuerySupport.getFieldTypes(fields, solrUrl, cloudClient, collection)
+      }
+
     logger.debug("Fields from schema handler: {}", fieldTypeMap.keySet.mkString(","))
     val structFields = new ListBuffer[StructField]
 
     // Retain the keys that are present in the Luke handler
-    fieldTypeMap.filterKeys(f => fieldsFromLuke.contains(f)).foreach{ case(fieldName, fieldMeta) =>
+    fieldTypeMap.foreach{ case(fieldName, fieldMeta) =>
       val metadata = new MetadataBuilder
       var dataType: DataType = {
         if (fieldMeta.fieldTypeClass.isDefined) {
@@ -118,11 +125,33 @@ object SolrRelationUtil extends LazyLogging {
       metadata.putString("name", fieldName)
       metadata.putString("type", fieldMeta.fieldType)
 
-      if (!flattenMultivalued && fieldMeta.isMultiValued.isDefined) {
+      val keepFieldMultivalued = if (flattenMultivalued.isEmpty) {
+        SolrRelationUtil.isValidDynamicFieldName(fieldName, dynamicExtensions)
+      } else {
+        !flattenMultivalued.get
+      }
+      if (keepFieldMultivalued && fieldMeta.isMultiValued.isDefined) {
         if (fieldMeta.isMultiValued.get) {
           dataType = new ArrayType(dataType, true)
           metadata.putBoolean("multiValued", value = true)
         }
+      }
+
+      if (!keepFieldMultivalued &&
+           fieldMeta.isMultiValued.isDefined &&
+           fieldMeta.isMultiValued.get &&
+           (dataType.isInstanceOf[StringType] ||
+             dataType.isInstanceOf[LongType] ||
+             dataType.isInstanceOf[IntegerType] ||
+             dataType.isInstanceOf[DoubleType] ||
+             dataType.isInstanceOf[FloatType])) {
+        /*
+        * Reset the dataType to a String if
+        * we are flattening a multi-value
+        * String, Long, Integer, Double or Float field.
+        */
+
+        dataType = DataTypes.StringType
       }
 
       if (fieldMeta.isRequired.isDefined)
@@ -161,14 +190,14 @@ object SolrRelationUtil extends LazyLogging {
     for (structField <- schema.fields) fieldMap.put(structField.name, structField)
 
     val listOfFields = new ListBuffer[StructField]
-    for (field <- fields) {
+    for (field <- fields.distinct) {
       if (field.funcReturnType.isDefined) {
         listOfFields.add(DataTypes.createStructField(field.alias.get, field.funcReturnType.get, false, Metadata.empty))
       } else {
         val fieldName = field.name
         if (fieldMap.contains(fieldName)) {
-          if (fieldMap.get(fieldName).isDefined) {
-            val structField = fieldMap.get(fieldName).get
+          if (fieldMap.contains(fieldName)) {
+            val structField = fieldMap(fieldName)
             if (field.alias.isDefined) {
               // have to use the alias here!!
               listOfFields.add(DataTypes.createStructField(field.alias.get, structField.dataType, structField.nullable, structField.metadata))
@@ -208,17 +237,91 @@ object SolrRelationUtil extends LazyLogging {
     solrQuery.setFields(fieldList.toList:_*)
   }
 
-  def applyFilter(filter: Filter, solrQuery: SolrQuery, baseSchema: StructType) = {
-   filter match {
-     case f: And =>
-       solrQuery.addFilterQuery(fq(f.left, baseSchema))
-       solrQuery.addFilterQuery(fq(f.right, baseSchema))
-     case f: Or =>
-       solrQuery.addFilterQuery("(" + fq(f.left, baseSchema) + " OR " + fq(f.right, baseSchema) + ")")
-     case f: Not =>
-       solrQuery.addFilterQuery("NOT " + fq(f.child, baseSchema))
-     case _ => solrQuery.addFilterQuery(fq(filter, baseSchema))
+  def applyFilter(filter: Filter, solrQuery: SolrQuery, baseSchema: StructType): Unit = {
+    filter match {
+      case f: And =>
+        val values = getAllFilterValues(f, baseSchema, ListBuffer.empty[String])
+        values.foreach(v => solrQuery.addFilterQuery(v))
+      case f: Or =>
+        val values = getAllFilterValues(f, baseSchema, ListBuffer.empty[String])
+        val fqStringBuilder = new StringBuilder
+        for (i <- values.indices) {
+          if (i == 0) fqStringBuilder.append("(")
+          fqStringBuilder.append(values(i))
+          if (i != values.size-1) {
+            fqStringBuilder.append(" OR ")
+          } else {
+            fqStringBuilder.append(")")
+          }
+        }
+        if (fqStringBuilder.nonEmpty) solrQuery.addFilterQuery(fqStringBuilder.toString())
+      case f: Not =>
+        f.child match {
+          case c : IsNull => solrQuery.addFilterQuery(fq(IsNotNull(c.attribute), baseSchema))
+          case _ => solrQuery.addFilterQuery("NOT " + fq(f.child, baseSchema))
+        }
+      case _ => solrQuery.addFilterQuery(fq(filter, baseSchema))
    }
+  }
+
+  def getAllFilterValues(filter: Filter, baseSchema: StructType, values: ListBuffer[String]): List[String] = {
+    filter match {
+      case f: And =>
+        f.left match {
+          case l: And => getAllFilterValues(l, baseSchema, values)
+          case l: Or =>
+            val nestedFqs = getAllFilterValues(l, baseSchema, ListBuffer.empty[String])
+            val singleFq = s"(${nestedFqs.mkString(" OR ")})"
+            values.+=(singleFq)
+          case l: Not =>
+            l.child match {
+              case c : IsNull => values.+=(fq(IsNotNull(c.attribute), baseSchema))
+              case _ => values.+=("NOT " + fq(l.child, baseSchema))
+            }
+          case _ => values.+=(fq(f.left, baseSchema))
+        }
+        f.right match {
+          case r: And => getAllFilterValues(r, baseSchema, values)
+          case r: Or =>
+            val nestedFqs = getAllFilterValues(r, baseSchema, ListBuffer.empty[String])
+            val singleFq = s"(${nestedFqs.mkString(" OR ")})"
+            values.+=(singleFq)
+          case r: Not =>
+            r.child match {
+              case c : IsNull => values.+=(fq(IsNotNull(c.attribute), baseSchema))
+              case _ => values.+=("NOT " + fq(r.child, baseSchema))
+            }
+          case _ => values.+=(fq(f.right, baseSchema))
+        }
+      case f: Or =>
+        f.left match {
+          case l: Or => getAllFilterValues(l, baseSchema, values)
+          case l: And =>
+            val nestedFqs = getAllFilterValues(l, baseSchema, ListBuffer.empty[String])
+            val singleFq = s"(${nestedFqs.mkString(" AND ")})"
+            values.+=(singleFq)
+          case l: Not =>
+            l.child match {
+              case c : IsNull => values.+=(fq(IsNotNull(c.attribute), baseSchema))
+              case _ => values.+=("NOT " + fq(l.child, baseSchema))
+            }
+          case _ => values.+=(fq(f.left, baseSchema))
+        }
+        f.right match {
+          case r: Or => getAllFilterValues(r, baseSchema, values)
+          case r: And =>
+            val nestedFqs = getAllFilterValues(r, baseSchema, ListBuffer.empty[String])
+            val singleFq = s"(${nestedFqs.mkString(" AND ")})"
+            values.+=(singleFq)
+          case r: Not =>
+            r.child match {
+              case c : IsNull => values.+=(fq(IsNotNull(c.attribute), baseSchema))
+              case _ => values.+=("NOT " + fq(r.child, baseSchema))
+            }
+          case _ => values.+=(fq(f.right, baseSchema))
+        }
+    }
+    values.toList
   }
 
   def getFilterValue(attr: String, value: String, baseSchema: StructType) = {
@@ -327,8 +430,8 @@ object SolrRelationUtil extends LazyLogging {
     val fieldList = new ListBuffer[String]
     for (field <- fields) {
       if (fieldMap.contains(field)) {
-        if (fieldMap.get(field).isDefined) {
-          val structField = fieldMap.get(field).get
+        if (fieldMap.contains(field)) {
+          val structField = fieldMap(field)
           val metadata = structField.metadata
           val fieldName = if (metadata.contains("name"))  metadata.getString("name") else field
           val isMultiValued = if (metadata.contains("multiValued")) metadata.getBoolean("multiValued") else false
@@ -360,7 +463,7 @@ object SolrRelationUtil extends LazyLogging {
     }
   }
 
-  def processFieldValue(fieldValue: Object, fieldType: DataType, multiValued: Boolean): Any = {
+  def processFieldValue(fieldValue: Any, fieldType: DataType, multiValued: Boolean): Any = {
     fieldValue match {
       case d: Date => new Timestamp(d.getTime)
       case s: String =>
@@ -390,6 +493,7 @@ object SolrRelationUtil extends LazyLogging {
         fieldType match {
           case ft: FloatType => f
           case st: StringType => f.toString
+          case lt: LongType => new java.lang.Long(f.longValue())
           case dt: DoubleType => new java.lang.Double(f.doubleValue())
           case _ => throw new MatchError(s"Can't convert Float value ${f} to ${fieldType}")
         }
@@ -397,6 +501,7 @@ object SolrRelationUtil extends LazyLogging {
       case d: java.lang.Double => {
         fieldType match {
           case dt: DoubleType => d
+          case lt: LongType => new java.lang.Long(d.longValue())
           case st: StringType => d.toString
           case _ => throw new MatchError(s"Can't convert Double value ${d} to ${fieldType}")
         }
@@ -451,6 +556,42 @@ object SolrRelationUtil extends LazyLogging {
         else {
           if (iterArray.nonEmpty) iterArray(0) else null
         }
+      case i: Int => {
+        fieldType match {
+          case _: IntegerType => i
+          case _: LongType => new java.lang.Long(i.longValue())
+          case _: StringType => i.toString
+          case _: FloatType => new java.lang.Float(i.floatValue())
+          case _: DoubleType => new java.lang.Double(i.doubleValue())
+          case _: ShortType => new java.lang.Short(i.shortValue())
+          case _ => throw new MatchError(s"Can't convert Integer value ${i} to ${fieldType}")
+        }
+      }
+      case l: Long => {
+        fieldType match {
+          case _: LongType => l
+          case _: StringType => l.toString
+          case _: DoubleType => new java.lang.Double(l.doubleValue())
+          case _ => throw new MatchError(s"Can't convert Long value ${l} to ${fieldType}")
+        }
+      }
+      case f: Float => {
+        fieldType match {
+          case _: FloatType => f
+          case _: StringType => f.toString
+          case _: LongType => new java.lang.Long(f.longValue())
+          case _: DoubleType => new java.lang.Double(f.doubleValue())
+          case _ => throw new MatchError(s"Can't convert Float value ${f} to ${fieldType}")
+        }
+      }
+      case d: Double => {
+        fieldType match {
+          case _: DoubleType => d
+          case _: LongType => new java.lang.Long(d.longValue())
+          case _: StringType => d.toString
+          case _ => throw new MatchError(s"Can't convert Double value ${d} to ${fieldType}")
+        }
+      }
       case a => a
     }
   }
@@ -481,6 +622,7 @@ object SolrRelationUtil extends LazyLogging {
   }
 
   def solrDocToRows[T](schema: StructType, docs: RDD[T]): RDD[Row] = {
+
     val fields = schema.fields
 
     val rows = docs.map(doc => {
@@ -495,18 +637,24 @@ object SolrRelationUtil extends LazyLogging {
               val fieldValues = solrDocument.getFieldValues(field.name)
               values.add(processMultipleFieldValues(fieldValues, fieldType))
             case map: util.Map[_,_] =>
-              val obj = map.get(field.name).asInstanceOf[Object]
-              val newValue = processFieldValue(obj, fieldType, multiValued = true)
-              newValue match {
-                case arr: Array[_] => values.add(arr)
-                case any => values.add(Array(any))
+              if (map.containsKey(field.name)) {
+                val obj = map.get(field.name).asInstanceOf[Object]
+                val newValue = processFieldValue(obj, fieldType, multiValued = true)
+                newValue match {
+                  case arr: Array[_] => values.add(arr)
+                  case any => values.add(Array(any))
+                    }
+              } else {
+                values.add(null)
               }
           }
         } else {
+
           doc match {
             case solrDocument: SolrDocument =>
-              val fieldValue = solrDocument.getFieldValue(field.name)
-              val newValue = processFieldValue(fieldValue, fieldType, multiValued = false)
+
+              val obj = solrDocument.get(field.name)
+              val newValue =  processSingleValue(obj, fieldType)
               if (metadata.contains(Constants.PROMOTE_TO_DOUBLE) && metadata.getBoolean(Constants.PROMOTE_TO_DOUBLE)) {
                 newValue match {
                   case n: java.lang.Number => values.add(n.doubleValue())
@@ -517,7 +665,7 @@ object SolrRelationUtil extends LazyLogging {
               }
             case map: util.Map[_,_] =>
               val obj = map.get(field.name).asInstanceOf[Object]
-              val newValue = processFieldValue(obj, fieldType, multiValued = false)
+              val newValue =  processSingleValue(obj, fieldType)
               if (metadata.contains(Constants.PROMOTE_TO_DOUBLE) && metadata.getBoolean(Constants.PROMOTE_TO_DOUBLE)) {
                 newValue match {
                   case n: java.lang.Number => values.add(n.doubleValue())
@@ -534,18 +682,78 @@ object SolrRelationUtil extends LazyLogging {
     rows
   }
 
+  def processSingleValue(obj: Any, fieldType: DataType): Any = {
+    obj match {
+      case l: java.util.List[Object] => {
+        /*
+        * Field is single valued in the schema but has a List of values.
+        * Most likely field flattening is on.
+        */
+        fieldType match {
+          case StringType => {
+            /*
+            * Field is a String so let's serialize the list to a String.
+            * Numerics (int, long, float, double) will also report to be String when flattened.
+            */
+            getFieldValueForList (l)
+          }
+          case any => {
+            /*
+            * Not String or numeric reporting to be a String. So let's process the field
+            * the default way.
+            */
+            processFieldValue(obj, fieldType, multiValued = false)
+          }
+        }
+      }
+      case any => {
+        processFieldValue(obj, fieldType, multiValued = false)
+      }
+    }
+  }
+
+
   def setAutoSoftCommit(zkHost: String, collection: String, softAutoCommitMs: Int): Unit = {
     val configJson = "{\"set-property\":{\"updateHandler.autoSoftCommit.maxTime\":\""+softAutoCommitMs+"\"}}";
 
     logger.info("POSTing: " + configJson + " to collection " + collection)
     val solrRequest = new GenericSolrRequest(SolrRequest.METHOD.POST, "/config", null)
-    val content = new ContentStreamBase.StringStream(configJson)
-    solrRequest.setContentStreams(Collections.singleton(content))
+    solrRequest.setContentWriter(new StringPayloadContentWriter(configJson, CommonParams.JSON_MIME))
 
     try {
       solrRequest.process(SolrSupport.getCachedCloudClient(zkHost), collection)
     } catch {
       case e: Exception => logger.error("Error setting softAutoCommit.maxTime. Exception: {}", e.getMessage)
     }
+  }
+
+  def getFieldValueForList(values: java.util.List[Object]): String = {
+
+    if(values != null && values.size() > 0) {
+      if(values.get(0).isInstanceOf[Number]) {
+        values.mkString(", ")
+      } else {
+        values.mkString("\"", "\", \"", "\"")
+      }
+
+    } else {
+      "[]"
+    }
+  }
+
+  // Deal with commas inside quotes like filters=a:"b, c",d:"e",c:"e, g,h"
+  def parseCommaSeparatedValuesToList(filters: String): List[String] = {
+    val filterList = ListBuffer.empty[String]
+    var start = 0
+    var inQuotes = false
+    for ((c, i) <- filters.zipWithIndex) {
+      if (c == '\"') inQuotes = !inQuotes
+      else if (c == ',' && !inQuotes) {
+        filterList.+=(filters.substring(start, i).trim)
+        start = i + 1
+      }
+      if (i == filters.length-1) filterList.+=(filters.substring(start).trim)
+    }
+    filterList.toList
   }
 }

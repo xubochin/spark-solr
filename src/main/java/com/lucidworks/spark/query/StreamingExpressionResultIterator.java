@@ -1,6 +1,5 @@
 package com.lucidworks.spark.query;
 
-import org.apache.commons.io.IOUtils;
 import org.apache.log4j.Logger;
 import org.apache.solr.client.solrj.impl.CloudSolrClient;
 import org.apache.solr.client.solrj.impl.HttpSolrClient;
@@ -77,7 +76,7 @@ public class StreamingExpressionResultIterator extends TupleStreamIterator {
       stream.setStreamContext(getStreamContext());
       stream.open();
       long diffMs = (System.currentTimeMillis() - startMs);
-      log.info("Open stream to "+url+" took "+diffMs+" (ms)");
+      log.debug("Open stream to "+url+" took "+diffMs+" (ms)");
     } catch (Exception e) {
       log.error("Failed to execute request ["+solrParams+"] due to: "+e, e);
       if (e instanceof RuntimeException) {
@@ -99,7 +98,7 @@ public class StreamingExpressionResultIterator extends TupleStreamIterator {
 
   protected Replica getRandomReplica() {
     ZkStateReader zkStateReader = cloudSolrClient.getZkStateReader();
-    Collection<Slice> slices = zkStateReader.getClusterState().getCollection(collection).getActiveSlices();
+    Collection<Slice> slices = zkStateReader.getClusterState().getCollection(collection.split(",")[0]).getActiveSlices();
     if (slices == null || slices.size() == 0)
       throw new IllegalStateException("No active shards found "+collection);
 

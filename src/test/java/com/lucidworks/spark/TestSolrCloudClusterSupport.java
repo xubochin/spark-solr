@@ -24,8 +24,6 @@ import org.junit.BeforeClass;
 import org.junit.AfterClass;
 import org.noggit.CharArr;
 import org.noggit.JSONWriter;
-import org.restlet.ext.servlet.ServerServlet;
-import org.scalatest.FunSuite;
 
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
@@ -71,6 +69,8 @@ public class TestSolrCloudClusterSupport {
 
   @BeforeClass
   public static void startCluster() throws Exception {
+
+      System.setProperty("jetty.testMode", "true");
     File solrXml = new File("src/test/resources/solr.xml");
     String solrXmlContents = readSolrXml(solrXml);
 
@@ -85,14 +85,13 @@ public class TestSolrCloudClusterSupport {
 
     // need the schema stuff
     final SortedMap<ServletHolder,String> extraServlets = new TreeMap<ServletHolder,String>();
-    final ServletHolder solrSchemaRestApi = new ServletHolder("SolrSchemaRestApi", ServerServlet.class);
-    solrSchemaRestApi.setInitParameter("org.restlet.application", "org.apache.solr.rest.SolrSchemaRestApi");
-    extraServlets.put(solrSchemaRestApi, "/schema/*");
 
     cluster = new MiniSolrCloudCluster(1, null /* hostContext */,
             testWorkingDir.toPath(), solrXmlContents, extraServlets, null);
 
-    cloudSolrServer = new CloudSolrClient.Builder().withZkHost(cluster.getZkServer().getZkAddress()).sendUpdatesOnlyToShardLeaders().build();
+    final List<String> zkHosts = Collections.singletonList(cluster.getZkServer().getZkAddress());
+    final Optional<String> zkChroot = Optional.empty();
+    cloudSolrServer = new CloudSolrClient.Builder(zkHosts, zkChroot).sendUpdatesOnlyToShardLeaders().build();
     cloudSolrServer.connect();
 
     assertTrue(!cloudSolrServer.getZkStateReader().getClusterState().getLiveNodes().isEmpty());
@@ -170,7 +169,7 @@ public class TestSolrCloudClusterSupport {
     zkr.updateLiveNodes(); // force the state to be fresh
 
     ClusterState cs = zkr.getClusterState();
-    Collection<Slice> slices = cs.getActiveSlices(testCollectionName);
+    Collection<Slice> slices = cs.getCollection(testCollectionName).getActiveSlices();
     assertTrue(slices.size() == shards);
     boolean allReplicasUp = false;
     long waitMs = 0L;
@@ -186,7 +185,7 @@ public class TestSolrCloudClusterSupport {
       cs = cloudSolrServer.getZkStateReader().getClusterState();
       assertNotNull(cs);
       allReplicasUp = true; // assume true
-      for (Slice shard : cs.getActiveSlices(testCollectionName)) {
+      for (Slice shard : cs.getCollection(testCollectionName).getActiveSlices()) {
         String shardId = shard.getName();
         assertNotNull("No Slice for " + shardId, shard);
         Collection<Replica> replicas = shard.getReplicas();
@@ -230,7 +229,7 @@ public class TestSolrCloudClusterSupport {
       cs = clusterState.getCollection(collection).toString();
     } else {
       Map<String,DocCollection> map = new HashMap<String,DocCollection>();
-      for (String coll : clusterState.getCollections())
+      for (String coll : clusterState.getCollectionsMap().keySet())
         map.put(coll, clusterState.getCollection(coll));
       CharArr out = new CharArr();
       new JSONWriter(out, 2).write(map);

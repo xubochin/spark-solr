@@ -4,7 +4,7 @@
 :toc-placement!:
 :toc-title:
 
-This project includes tools for reading data from Solr as a Spark RDD and indexing objects from Spark into Solr using SolrJ.
+This project includes tools for reading data from Solr as a Spark DataFrame/RDD and indexing objects from Spark into Solr using SolrJ.
 
 toc::[]
 
@@ -17,18 +17,27 @@ chart below shows the versions supported across the past releases. 'Connector' r
 [width="40%",frame="topbot",options="header,footer"]
 |======================
 |Connector      | Spark | Solr
-|http://search.maven.org/#artifactdetails%7Ccom.lucidworks.spark%7Cspark-solr%7C3.1.0%7Cjar[3.1.1]  | 2.1.1 | 6.6.0
-|http://search.maven.org/#artifactdetails%7Ccom.lucidworks.spark%7Cspark-solr%7C3.0.2%7Cjar[3.0.2]  | 2.1.1 | 6.5.1
-|http://search.maven.org/#artifactdetails%7Ccom.lucidworks.spark%7Cspark-solr%7C3.0.1%7Cjar[3.0.1]  | 2.1.1 | 6.5.1
-|http://search.maven.org/#artifactdetails%7Ccom.lucidworks.spark%7Cspark-solr%7C3.0.0-beta3%7Cjar[3.0.0-beta3]  | 2.1.0 | 6.4.2
-|http://search.maven.org/#artifactdetails%7Ccom.lucidworks.spark%7Cspark-solr%7C3.0.0-beta%7Cjar[3.0.0-beta]  | 2.1.0 | 6.3.0
-|http://search.maven.org/#artifactdetails%7Ccom.lucidworks.spark%7Cspark-solr%7C3.0.0-alpha.2%7Cjar[3.0.0-alpha.2]  | 2.0.1 | 6.2.1
-|http://search.maven.org/#artifactdetails%7Ccom.lucidworks.spark%7Cspark-solr%7C2.4.0%7Cjar[2.4.0]          | 1.6.3 | 6.4.2
-|http://search.maven.org/#artifactdetails%7Ccom.lucidworks.spark%7Cspark-solr%7C2.3.4%7Cjar[2.3.4]          | 1.6.3 | 6.3.0
-|http://search.maven.org/#artifactdetails%7Ccom.lucidworks.spark%7Cspark-solr%7C2.3.3%7Cjar[2.3.3]          | 1.6.3 | 6.3.0
-|http://search.maven.org/#artifactdetails%7Ccom.lucidworks.spark%7Cspark-solr%7C2.2.3%7Cjar[2.2.3]          | 1.6.2 | 6.1.0
-|http://search.maven.org/#artifactdetails%7Ccom.lucidworks.spark%7Cspark-solr%7C2.1.0%7Cjar[2.1.0]          | 1.6.2 | 6.1.0
-|http://search.maven.org/#artifactdetails%7Ccom.lucidworks.spark%7Cspark-solr%7C2.0.4%7Cjar[2.0.4]          | 1.6.1 | 5.5.2
+|https://search.maven.org/artifact/com.lucidworks.spark/spark-solr/4.0.2/jar[4.0.2]   | 3.1.2 | 8.11.0
+|https://search.maven.org/artifact/com.lucidworks.spark/spark-solr/4.0.1/jar[4.0.1]   | 3.1.2 | 8.11.0
+|https://search.maven.org/artifact/com.lucidworks.spark/spark-solr/4.0.0/jar[4.0.0]   | 3.1.2 | 8.9.0
+|https://search.maven.org/artifact/com.lucidworks.spark/spark-solr/3.10.0/jar[3.10.0]   | 2.4.5 | 8.9.0
+|https://search.maven.org/artifact/com.lucidworks.spark/spark-solr/3.9.0/jar[3.9.0]   | 2.4.5 | 8.3.0
+|https://search.maven.org/artifact/com.lucidworks.spark/spark-solr/3.8.0/jar[3.8.1]   | 2.4.5 | 8.3.0
+|https://search.maven.org/artifact/com.lucidworks.spark/spark-solr/3.8.0/jar[3.8.0]   | 2.4.5 | 8.3.0
+|https://search.maven.org/artifact/com.lucidworks.spark/spark-solr/3.7.0/jar[3.7.0]   | 2.4.4 | 8.3.0
+|https://search.maven.org/artifact/com.lucidworks.spark/spark-solr/3.6.6/jar[3.6.6]   | 2.4.3 | 8.2.0
+|https://search.maven.org/artifact/com.lucidworks.spark/spark-solr/3.6.0/jar[3.6.0]   | 2.4.0 | 7.5.0
+|https://search.maven.org/artifact/com.lucidworks.spark/spark-solr/3.5.8/jar[3.5.19]  | 2.3.2 | 7.6.0
+|https://search.maven.org/artifact/com.lucidworks.spark/spark-solr/3.4.5/jar[3.4.5]   | 2.2.1 | 7.2.1
+|https://search.maven.org/artifact/com.lucidworks.spark/spark-solr/3.3.4/jar[3.3.4]   | 2.2.0 | 7.1.0
+|https://search.maven.org/artifact/com.lucidworks.spark/spark-solr/3.2.2/jar[3.2.2]   | 2.2.0 | 6.6.1
+|https://search.maven.org/artifact/com.lucidworks.spark/spark-solr/3.1.1/jar[3.1.1]   | 2.1.1 | 6.6.0
+|https://search.maven.org/artifact/com.lucidworks.spark/spark-solr/3.0.4/jar[3.0.4]   | 2.1.1 | 6.5.1
+|https://search.maven.org/artifact/com.lucidworks.spark/spark-solr/2.4.0/jar[2.4.0]   | 1.6.3 | 6.4.2
+|https://search.maven.org/artifact/com.lucidworks.spark/spark-solr/2.3.4/jar[2.3.4]   | 1.6.3 | 6.3.0
+|https://search.maven.org/artifact/com.lucidworks.spark/spark-solr/2.2.3/jar[2.2.3]   | 1.6.2 | 6.1.0
+|https://search.maven.org/artifact/com.lucidworks.spark/spark-solr/2.1.0/jar[2.1.0]   | 1.6.2 | 6.1.0
+|https://search.maven.org/artifact/com.lucidworks.spark/spark-solr/2.0.4/jar[2.0.4]   | 1.6.1 | 5.5.2
 |======================
 
 
@@ -39,7 +48,7 @@ chart below shows the versions supported across the past releases. 'Connector' r
 
 [source]
 cd $SPARK_HOME
-./bin/spark-shell --jars spark-solr-3.0.1-shaded.jar
+./bin/spark-shell --jars spark-solr-{version}-shaded.jar
 
 The shaded jar can be downloaded from the http://search.maven.org/#search%7Cgav%7C1%7Cg%3A%22com.lucidworks.spark%22%20AND%20a%3A%22spark-solr%22[Maven Central] or built from the respective branch
 
@@ -59,10 +68,10 @@ val df = spark.read.format("solr")
 ==== via RDD
 
 [source,scala]
-import com.lucidworks.spark.rdd.SolrRDD
-val solrRDD = new SolrRDD(zkHost, collectionName, sc)
+import com.lucidworks.spark.rdd.SelectSolrRDD
+val solrRDD = new SelectSolrRDD(zkHost, collectionName, sc)
 
-SolrRDD is an RDD of https://lucene.apache.org/solr/6_1_0/solr-solrj/org/apache/solr/common/SolrDocument.html[SolrDocument]
+SelectSolrRDD is an RDD of https://lucene.apache.org/solr/api/solr-solrj/org/apache/solr/common/SolrDocument.html[SolrDocument]
 
 ==== via RDD (Java)
 
@@ -87,7 +96,7 @@ The released jar files (1.1.2, 2.0.0, etc..) can be downloaded from the http://s
 <dependency>
    <groupId>com.lucidworks.spark</groupId>
    <artifactId>spark-solr</artifactId>
-   <version>3.0.0-alpha</version>
+   <version>{latestVersion}</version>
 </dependency>
 
 ==== Snapshots
@@ -105,7 +114,7 @@ This will build 2 jars in the `target` directory:
 * `spark-solr-${VERSION}.jar`
 * `spark-solr-${VERSION}-shaded.jar`
 
-`${VERSION}` will be something like 2.1.0-SNAPSHOT, for development builds.
+`${VERSION}` will be something like 3.5.6-SNAPSHOT, for development builds.
 
 The first .jar is what you'd want to use if you were using spark-solr in your own project. The second is what you'd use to submit one of the included example apps to Spark.
 //end::build-source[]
@@ -127,22 +136,22 @@ The first .jar is what you'd want to use if you were using spark-solr in your ow
 
 === Cursors
 
-https://cwiki.apache.org/confluence/display/solr/Pagination+of+Results[Cursors] are used by default to pull documents out of Solr. By default, the number of tasks allocated will be the number of shards available for the collection.
+https://lucene.apache.org/solr/guide/pagination-of-results.html[Cursors] are used by default to pull documents out of Solr. By default, the number of tasks allocated will be the number of shards available for the collection.
 
 If your Spark cluster has more available executor slots than the number of shards, then you can increase parallelism when reading from Solr by splitting each shard into sub ranges using a split field. A good candidate for the split field is the version field that is attached to every document by the shard leader during indexing. See <<splits>> section to enable and configure intra shard splitting.
 
-Cursors won't work if the index changes during the query time. Constrain your query to a static index by using additional Solr parameters using <<solr.params>>.
+Cursors won't work if the index changes during the query time. Constrain your query to a static index by using additional Solr parameters using <<solr-params,solr.params>>.
 
 === Streaming API (/export)
 
-If the fields that are being queried have https://cwiki.apache.org/confluence/display/solr/DocValues[docValues] enabled, then the Streaming API can be used to pull documents from Solr in a true Streaming fashion. This method is *8-10x* faster than Cursors. The option <<request_handler>> allows you to enable Streaming API via DataFrame.
+If the fields that are being queried have https://lucene.apache.org/solr/guide/docvalues.html[docValues] enabled, then the Streaming API can be used to pull documents from Solr in a true Streaming fashion. This method is *8-10x* faster than Cursors. The option <<request_handler>> allows you to enable Streaming API via DataFrame.
 
 //end::querying[]
 
 //tag::indexing[]
 == Indexing
 
-Objects can be sent to Solr via Spark Streaming or DataFrames. The schema is inferred from the DataFrame and any fields that do not exist in Solr schema will be added via Schema API. See https://cwiki.apache.org/confluence/display/solr/Schema+Factory+Definition+in+SolrConfig[ManagedIndexSchemaFactory].
+Objects can be sent to Solr via Spark Streaming or DataFrames. The schema is inferred from the DataFrame and any fields that do not exist in Solr schema will be added via Schema API. See https://lucene.apache.org/solr/guide/schema-factory-definition-in-solrconfig.html[ManagedIndexSchemaFactory].
 
 See <<Index parameters>> for configuration and tuning.
 
@@ -214,12 +223,12 @@ Defalut: None
 
 ==== request_handler
 
-Set the Solr request handler for queries. This option can be used to export results from Solr via `/export` handler which streams data out of Solr. See https://cwiki.apache.org/confluence/display/solr/Exporting+Result+Sets[Exporting Result Sets] for more information.
+Set the Solr request handler for queries. This option can be used to export results from Solr via `/export` handler which streams data out of Solr. See https://lucene.apache.org/solr/guide/exporting-result-sets.html[Exporting Result Sets] for more information.
 
 The `/export` handler needs fields to be explicitly specified. Please use the `fields` option or specify the fields in the query.
 
 Usage: `option("request_handler", "/export")`
-Default: /select 
+Default: /select
 
 ==== Increase Read Parallelism using Intra-Shard Splits
 
@@ -252,7 +261,7 @@ Keep in mind that this is only a hint to the split calculator and you may end up
 
 Usage: `option("splits_per_shard", "30")`
 
-Default: 20
+Default: 1
 
 ==== flatten_multivalued
 
@@ -278,32 +287,6 @@ Usage: `option("skip_non_dv", "true")`
 
 Default: false
 
-=== Index parameters
-
-==== soft_commit_secs
-
-If specified, the `soft_commit_secs` option will be set via SolrConfig API during indexing
-
-Usage: `option("soft_commit_secs", "10")`
-
-Default: None
-
-==== batch_size
-
-The `batch_size` option determines the number of documents that are sent to Solr via a HTTP call during indexing. Set this option higher if the docs are small and memory is available.
-
-Usage: `option("batch_size", "10000")`
-
-Default: 500
-
-==== gen_uniq_key
-
-If the documents are missing the unique key (derived from Solr schema), then the `gen_uniq_key` option will generate a unique value for each document before indexing to Solr. Instead of this option, the http://lucene.apache.org/solr/5_5_0/solr-core/org/apache/solr/update/processor/UUIDUpdateProcessorFactory.html[UUIDUpdateProcessorFactory] can be used to generate UUID values for documents that are missing the unique key field
-
-Usage: `option("gen_uniq_key", "true")`
-
-Default: false
-
 ==== sample_seed
 
 The `sample_seed` option allows you to read a random sample of documents from Solr using the specified seed. This option can be useful if you just need to explore the data before performing operations on the full result set. By default, if this option is provided, a 10% sample size is read from Solr, but you can use the `sample_pct` option to control the sample size.
@@ -320,13 +303,54 @@ Usage: `option("sample_pct", "0.05")`
 
 Default: 0.1
 
-=== solr.params
+==== solr.params
 
 The `solr.params` option can be used to specify any arbitrary Solr parameters in the form of a Solr query.
 
 TIP: Don't use this to pass parameters that are covered by other options, such as `fl` (use the `fields` option) or `sort`. This option is strictly intended for parameters that are *NOT* covered by other options.
 
 Usage: `option("solr.params", "fq=userId:[10 TO 1000]")`
+
+
+=== Index parameters
+
+==== soft_commit_secs
+
+If specified, the `soft_commit_secs` option will be set via SolrConfig API during indexing
+
+Usage: `option("soft_commit_secs", "10")`
+
+Default: None
+
+==== commit_within
+
+The `commit_within` param sets `commitWithin` on the indexing requests processed by SolrClient. This value should be in milliseconds. See https://lucene.apache.org/solr/guide/6_6/updatehandlers-in-solrconfig.html#UpdateHandlersinSolrConfig-commitWithin[commitWithin]
+
+Usage: `option("commit_within", "5000")`
+
+Default: None
+
+==== batch_size
+
+The `batch_size` option determines the number of documents that are sent to Solr via a HTTP call during indexing. Set this option higher if the docs are small and memory is available.
+
+Usage: `option("batch_size", "10000")`
+
+Default: 500
+
+==== gen_uniq_key
+
+If the documents are missing the unique key (derived from Solr schema), then the `gen_uniq_key` option will generate a unique value for each document before indexing to Solr. Instead of this option, the http://lucene.apache.org/solr/api/solr-core/org/apache/solr/update/processor/UUIDUpdateProcessorFactory.html[UUIDUpdateProcessorFactory] can be used to generate UUID values for documents that are missing the unique key field
+
+Usage: `option("gen_uniq_key", "true")`
+
+Default: false
+
+==== solr_field_types
+
+This option can used to specify field type for fields written to Solr. Only works if the field names are not already defined in Solr schema
+
+Usage: `option("solr_field_types", "rating:string,title:text_en"`
 
 === Querying Time Series Data
 
@@ -354,11 +378,11 @@ Usage: `option("datetime_pattern", "yyyy_MM_dd_HH_mm")`
 
 Default: yyyy_MM_dd
 
-==== time_stamp_field_name
+==== timestamp_field_name
 
 This option is used to specify the field name in the indexed documents where time stamp is found.
 
-Usage: `option("time_stamp_field_name", "ts")`
+Usage: `option("timestamp_field_name", "ts")`
 
 Default: timestamp_tdt
 
@@ -377,32 +401,6 @@ This option is used to specify the maximum number of partitions that must be all
 Usage: `option("max_active_partitions", "100")`
 
 Default: null
-
-=== Index parameters
-
-==== soft_commit_secs
-
-If specified, the `soft_commit_secs` option will be set via SolrConfig API during indexing
-
-Usage: `option("soft_commit_secs", "10")`
-
-Default: None
-
-==== batch_size
-
-The `batch_size` option determines the number of documents that are sent to Solr via a HTTP call during indexing. Set this option higher if the docs are small and memory is available.
-
-Usage: `option("batch_size", "10000")`
-
-Default: 500
-
-==== gen_uniq_key
-
-If the documents are missing the unique key (derived from Solr schema), then the `gen_uniq_key` option will generate a unique value for each document before indexing to Solr. Instead of this option, the http://lucene.apache.org/solr/5_5_0/solr-core/org/apache/solr/update/processor/UUIDUpdateProcessorFactory.html[UUIDUpdateProcessorFactory] can be used to generate UUID values for documents that are missing the unique key field
-
-Usage: `option("gen_uniq_key", "true")`
-
-Default: false
 
 //end::tuning[]
 
@@ -445,11 +443,14 @@ See `com.lucidworks.spark.example.streaming.oneusagov.OneUsaGovStreamProcessor` 
 //tag::spark-auth[]
 == Authenticating with Solr
 
-For background on Solr security, see: https://cwiki.apache.org/confluence/display/solr/Security.
+For background on Solr security, see: https://lucene.apache.org/solr/guide/6_6/securing-solr.html[Securing Solr].
 
 === Kerberos
 
-The SparkApp framework allows you to pass the path to a JAAS authentication configuration file using the `-solrJaasAuthConfig option`.
+The Kerberos config should be set via system param `java.security.auth.login.config` on extraJavaOptions for both executor and driver.
+
+==== SparkApp
+The SparkApp framework (in spark-solr) allows you to pass the path to a JAAS authentication configuration file using the `-solrJaasAuthConfig option`.
 
 For example, if you need to authenticate using the "solr" Kerberos principal, you need to create a JAAS configuration  file named `jaas-client.conf` that sets the location of your Kerberos keytab file, such as:
 
@@ -475,7 +476,7 @@ spark-submit --master yarn-server \
   -solrJaasAuthConfig=/path/to/jaas-client.conf
 
 
-== Basic Auth
+=== Basic Auth
 
 Basic auth can be configured via System properties `basicauth` or `solr.httpclient.config`. These system properties have to be set on Driver and Executor JVMs
 

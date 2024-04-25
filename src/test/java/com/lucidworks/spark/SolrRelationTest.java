@@ -10,6 +10,7 @@ import org.apache.solr.common.SolrInputDocument;
 import org.apache.spark.sql.*;
 import org.apache.spark.sql.api.java.UDF1;
 import org.apache.spark.sql.types.*;
+import org.junit.BeforeClass;
 import org.junit.Test;
 
 import javax.xml.bind.DatatypeConverter;
@@ -41,6 +42,7 @@ public class SolrRelationTest extends RDDProcessorTestBase {
       options.put(SOLR_COLLECTION_PARAM(), testCollection);
       options.put(SAMPLE_SEED(), "5150");
       options.put(SAMPLE_PCT(), "0.1");
+      options.put(SOLR_SPLITS_PER_SHARD_PARAM(), "2");
       Dataset fromSolr = sparkSession.read().format(Constants.SOLR_FORMAT()).options(options).load();
       long count = fromSolr.count();
 
@@ -124,6 +126,7 @@ public class SolrRelationTest extends RDDProcessorTestBase {
   //@Ignore
   @Test
   public void testFlattenMultivalued() throws Exception {
+
     String testCollection = "testFlattenMultivalued";
     try {
       deleteCollection(testCollection);
@@ -142,19 +145,45 @@ public class SolrRelationTest extends RDDProcessorTestBase {
       byte[] imagesBytes = "this is the value of the images field".getBytes(StandardCharsets.UTF_8);
       doc.addField("images", DatatypeConverter.printBase64Binary(imagesBytes));
       doc.addField("ts_tdts", now);
+      doc.addField("test_i", "1");
+      doc.addField("test_ii", "1");
+      doc.addField("test_ii", "2");
+      doc.addField("test_ss", "hello");
+      doc.addField("test_ss", "world");
+
+
       cloudSolrServer.add(testCollection, doc);
       cloudSolrServer.commit(testCollection);
+
+
+      SolrInputDocument doc1 = new SolrInputDocument();
+      doc1.setField("id", "flatten-2");
+      doc1.setField("_raw_content_", DatatypeConverter.printBase64Binary(rawContentBytes));
+      doc1.addField("ts_tdts", now);
+      doc1.addField("test_i", "2");
+      doc1.addField("test_ii", "1");
+      doc1.addField("test_ii", "2");
+      doc1.addField("test_ss", "hello");
+      doc1.addField("test_ss", "world");
+      doc1.addField("a_ss", "test");
+      doc1.addField("a_ss", "test1");
+
+
+      cloudSolrServer.add(testCollection, doc1);
+      cloudSolrServer.commit(testCollection);
+
 
       String zkHost = cluster.getZkServer().getZkAddress();
       Map<String, String> options = new HashMap<String, String>();
       options.put(SOLR_ZK_HOST_PARAM(), zkHost);
       options.put(SOLR_COLLECTION_PARAM(), testCollection);
       options.put(FLATTEN_MULTIVALUED(), "true");
-      options.put(SOLR_FIELD_PARAM(), "id, _raw_content_, images, ts_tdts");
+      options.put(SORT_PARAM(), "id asc");
+      options.put(SOLR_FIELD_PARAM(), "id, _raw_content_, images, ts_tdts, test_ii, test_ss, a_ss");
 
       SolrQuery q = new SolrQuery("*:*");
       q.setRows(100);
-      q.addSort("id", SolrQuery.ORDER.asc);
+      q.addSort("test_i", SolrQuery.ORDER.asc);
 //      dumpSolrCollection(testCollection, q);
 
       // now read the data back from Solr and validate that it was saved correctly and that all data type handling is correct
@@ -162,9 +191,17 @@ public class SolrRelationTest extends RDDProcessorTestBase {
       fromSolr.printSchema();
 
       List<Row> rows = fromSolr.collectAsList();
-      assertTrue(rows.size() == 1);
+      assertTrue(rows.size() == 2);
       Row first = rows.get(0);
       assertEquals(doc.getFieldValue("id"), first.get(first.fieldIndex("id")));
+      assertEquals("1, 2", first.get(first.fieldIndex("test_ii")));
+      assertEquals("\"hello\", \"world\"", first.get(first.fieldIndex("test_ss")));
+      assertNull(first.get(first.fieldIndex("a_ss")));
+
+
+      Row second = rows.get(1);
+      assertEquals("\"test\", \"test1\"", second.get(second.fieldIndex("a_ss")));
+
 
       // compare the bytes in the images field, which proves the multivalued field was flattened correctly
       byte[] images = (byte[])first.get(first.fieldIndex("images"));
@@ -201,22 +238,13 @@ public class SolrRelationTest extends RDDProcessorTestBase {
         options.put(SOLR_COLLECTION_PARAM(), testCollection);
 
         Dataset df = sparkSession.read().format("solr").options(options).load();
-        df.registerTempTable("events");
+        df.createOrReplaceTempView("events");
         sparkSession.sql("SELECT * FROM events").take(1);
 
         sparkSession.sql("SELECT `params.title_s` from events").take(2);
       }
     } finally {
       deleteCollection(testCollection);
-    }
-  }
-
-  @Test
-  public void testDynamicFieldNames() throws Exception {
-    Dataset aggDF = sparkSession.read().json("src/test/resources/test-data/em_sample.json");
-    for (String fieldName : aggDF.schema().fieldNames()) {
-      if (!fieldName.equals("id") && !fieldName.equals("_version_"))
-        assertTrue("Failed for field name '" + fieldName + "'", SolrRelationUtil.isValidDynamicFieldName(fieldName));
     }
   }
 
@@ -270,7 +298,6 @@ public class SolrRelationTest extends RDDProcessorTestBase {
     Map<String, String> options = new HashMap<String, String>();
     options.put(SOLR_ZK_HOST_PARAM(), zkHost);
     options.put(SOLR_COLLECTION_PARAM(), testCollection);
-    options.put(FLATTEN_MULTIVALUED(), "false");
     options.put(ARBITRARY_PARAMS_STRING(), "sort=id asc");
 
     // now read the data back from Solr and validate that it was saved correctly and that all data type handling is correct
@@ -301,10 +328,10 @@ public class SolrRelationTest extends RDDProcessorTestBase {
       Map<String, String> options = new HashMap<String, String>();
       options.put(SOLR_ZK_HOST_PARAM(), zkHost);
       options.put(SOLR_COLLECTION_PARAM(), testCollection);
-      options.put(FLATTEN_MULTIVALUED(), "false");
 
       Dataset df = sparkSession.read().format("solr").options(options).load();
       df.show();
+      df.createOrReplaceTempView(testCollection);
       validateSchema(df);
       //df.show();
 
@@ -355,6 +382,10 @@ public class SolrRelationTest extends RDDProcessorTestBase {
       count = df.filter(df.col("field1_s").isNull()).count();
       assertCount(0, count, "field1_s IS NULL");
 
+      // SQL tests
+      count = sparkSession.sql("SELECT * FROM " + testCollection + " WHERE NOT ISNULL(field1_s)").count();
+      assertCount(4, count, "field1_s NOT ISNULl");
+
       // write to another collection to test writes
       String confName = "testConfig";
       File confDir = new File("src/test/resources/conf");
@@ -365,7 +396,6 @@ public class SolrRelationTest extends RDDProcessorTestBase {
       HashMap<String, String> newOptions = new HashMap<String, String>();
       newOptions.put(SOLR_ZK_HOST_PARAM(), zkHost);
       newOptions.put(SOLR_COLLECTION_PARAM(), testCollection2);
-      newOptions.put(FLATTEN_MULTIVALUED(), "false");
       newOptions.put(SOFT_AUTO_COMMIT_SECS(), "2");
 
       Dataset cleanDF = sparkSession.read().format("solr").options(options).load();

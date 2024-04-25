@@ -1,5 +1,7 @@
 package com.lucidworks.spark.util
 
+import com.lucidworks.spark.BatchSizeType
+
 // This should only be used for config options for the sql statements [SolrRelation]
 object ConfigurationConstants {
   val SOLR_ZK_HOST_PARAM: String = "zkhost"
@@ -26,10 +28,13 @@ object ConfigurationConstants {
   // Index params
   val SOFT_AUTO_COMMIT_SECS: String = "soft_commit_secs"
   val BATCH_SIZE: String = "batch_size"
+  // num_docs or num_bytes
+  val BATCH_SIZE_TYPE: String = "batch_size_type"
   val GENERATE_UNIQUE_KEY: String = "gen_uniq_key"
   val GENERATE_UNIQUE_CHILD_KEY: String = "gen_uniq_child_key"
   val COMMIT_WITHIN_MILLI_SECS: String = "commit_within"
   val CHILD_DOC_FIELDNAME: String = "child_doc_fieldname"
+  val SOLR_FIELD_TYPES: String = "solr_field_types"
 
   val SAMPLE_SEED: String = "sample_seed"
   val SAMPLE_PCT: String = "sample_pct"
@@ -37,14 +42,17 @@ object ConfigurationConstants {
   // Time series partitioning params
 
   val PARTITION_BY:String="partition_by"
-  val TIME_STAMP_FIELD_NAME:String="time_stamp_field_name"
+  val TIMESTAMP_FIELD_NAME:String="timestamp_field_name"
   val TIME_PERIOD:String="time_period"
   val DATETIME_PATTERN:String="datetime_pattern"
   val TIMEZONE_ID:String="timezone_id"
   val MAX_ACTIVE_PARTITIONS:String="max_active_partitions"
+  val COLLECTION_ALIAS:String="collection_alias"
 
   val ARBITRARY_PARAMS_STRING: String = "solr.params"
 
+  val SCHEMA: String = "schema"
+  val MAX_SHARDS_FOR_SCHEMA_SAMPLING = "max_schema_sampling_shards"
   val STREAMING_EXPR_SCHEMA: String = "expr_schema"
   val SOLR_SQL_SCHEMA: String = "sql_schema"
   val EXCLUDE_FIELDS: String = "exclude_fields"

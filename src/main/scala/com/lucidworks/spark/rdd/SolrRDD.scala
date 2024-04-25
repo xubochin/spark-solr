@@ -2,11 +2,11 @@ package com.lucidworks.spark.rdd
 
 import com.lucidworks.spark._
 import com.lucidworks.spark.util.QueryConstants._
-import com.lucidworks.spark.util.SolrQuerySupport
-import com.typesafe.scalalogging.LazyLogging
+import com.lucidworks.spark.util.{CacheCloudSolrClient, CacheHttpSolrClient, SolrQuerySupport}
 import org.apache.solr.client.solrj.SolrQuery
 import org.apache.spark._
 import org.apache.spark.rdd.RDD
+import org.apache.spark.scheduler.{SparkListenerApplicationEnd, SparkListenerEvent}
 
 import scala.reflect.ClassTag
 import scala.util.Random
@@ -26,15 +26,17 @@ abstract class SolrRDD[T: ClassTag](
   extends RDD[T](sc, Seq.empty)
   with LazyLogging {
 
-  val uniqueKey: String = if (uKey.isDefined) uKey.get else SolrQuerySupport.getUniqueKey(zkHost, collection.split(",")(0))
-
-  override def getPreferredLocations(split: Partition): Seq[String] = {
-    split match {
-      case partition: SelectSolrRDDPartition => Array(partition.preferredReplica.getHostAndPort())
-      case partition: ExportHandlerPartition => Array(partition.preferredReplica.getHostAndPort())
-      case _: AnyRef => Seq.empty
+  sparkContext.addSparkListener(new SparkFirehoseListener() {
+    override def onEvent(event: SparkListenerEvent): Unit = event match {
+        case e: SparkListenerApplicationEnd =>
+          logger.debug(s"Invalidating cloud client and http client caches for event ${e}")
+          CacheCloudSolrClient.cache.invalidateAll()
+          CacheHttpSolrClient.cache.invalidateAll()
+        case _ =>
     }
-  }
+  })
+
+  val uniqueKey: String = if (uKey.isDefined) uKey.get else SolrQuerySupport.getUniqueKey(zkHost, collection.split(",")(0))
 
   def buildQuery: SolrQuery
 
@@ -76,6 +78,19 @@ abstract class SolrRDD[T: ClassTag](
     }
   }
 
+  def calculateSplitsPerShard(solrQuery: SolrQuery, shardSize: Int, replicaSize: Int, docsPerTask: Int = 10000, maxRows: Option[Int] = None): Int = {
+    val minSplitSize = 2 * replicaSize
+    if (maxRows.isDefined) return minSplitSize
+    val noOfDocs = SolrQuerySupport.getNumDocsFromSolr(collection, zkHost, Some(solrQuery))
+    val splits = noOfDocs / (docsPerTask * shardSize)
+    val splitsPerShard = if (splits > minSplitSize) {
+      splits.toInt
+    } else {
+      minSplitSize
+    }
+    logger.debug(s"Suggested split size: ${splitsPerShard} for collection size: ${noOfDocs} using query: ${solrQuery}")
+    splitsPerShard
+  }
 }
 
 object SolrRDD {
@@ -122,5 +137,6 @@ object SolrRDD {
   def requiresStreamingRDD(rq: String): Boolean = {
     rq == QT_EXPORT || rq == QT_STREAM || rq == QT_SQL
   }
+
 }
 

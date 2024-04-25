@@ -4,14 +4,14 @@ import java.util.Collections
 
 import com.lucidworks.spark.rdd.SelectSolrRDD
 import com.lucidworks.spark.util.ConfigurationConstants._
+import com.lucidworks.spark.util.SolrDataFrameImplicits._
 import com.lucidworks.spark.util.{QueryField, SolrRelationUtil}
 import org.apache.solr.client.solrj.SolrQuery
 import org.apache.solr.client.solrj.SolrQuery.SortClause
+import org.apache.spark.solr.SparkInternalObjects
 import org.apache.spark.sql.DataFrame
 
 import scala.collection.JavaConverters._
-import com.lucidworks.spark.util.SolrDataFrameImplicits._
-import org.apache.spark.solr.SparkInternalObjects
 
 class EventsimTestSuite extends EventsimBuilder {
 
@@ -20,7 +20,7 @@ class EventsimTestSuite extends EventsimBuilder {
       .query("*:*")
       .rows(10)
       .select(Array("id"))
-    assert(solrRDD.getNumPartitions == numShards*4)
+    assert(solrRDD.getNumPartitions == numShards*2)
     testCommons(solrRDD)
   }
 
@@ -32,6 +32,57 @@ class EventsimTestSuite extends EventsimBuilder {
   test("Split partitions by field name") {
     val solrRDD = new SelectSolrRDD(zkHost, collectionName, sc).splitField("id").splitsPerShard(2)
     testCommons(solrRDD)
+  }
+
+  test("User requested fields with schema") {
+    val df = sparkSession.read.format("solr")
+      .option(SOLR_ZK_HOST_PARAM, zkHost)
+      .option(SOLR_COLLECTION_PARAM, collectionName)
+      .option(SOLR_FIELD_PARAM, "userId, ts")
+      .option(SOLR_QUERY_PARAM, "userId:93")
+      .option(SCHEMA, "userId:string,ts:timestamp")
+      .load()
+    val singleRow = df.take(1)(0)
+    assert(singleRow.length == 2)
+  }
+
+  test("Sort by two fields") {
+    val df = sparkSession.read.format("solr")
+      .option(SOLR_ZK_HOST_PARAM, zkHost)
+      .option(SOLR_COLLECTION_PARAM, collectionName)
+      .option(SOLR_FIELD_PARAM, "userId, ts")
+      .option(SOLR_QUERY_PARAM, "userId:93")
+      .option(SORT_PARAM, "userId asc, ts asc")
+      .load()
+    val singleRow = df.take(1)(0)
+    assert(singleRow.length == 2)
+    assert(singleRow(df.schema.fieldIndex("userId")).toString.toInt == 93)
+  }
+
+  test("Alias and Sort by field") {
+    val df = sparkSession.read.format("solr")
+      .option(SOLR_ZK_HOST_PARAM, zkHost)
+      .option(SOLR_COLLECTION_PARAM, collectionName)
+      .option(SOLR_FIELD_PARAM, "user:userId,userId")
+      .option(SCHEMA, """userId:\"string\"""")
+      .load()
+    df.printSchema()
+    val singleRow = df.take(1)(0)
+    assert(singleRow.length == 2)
+  }
+
+  test("Sort by score") {
+    val df = sparkSession.read.format("solr")
+      .option(SOLR_ZK_HOST_PARAM, zkHost)
+      .option(SOLR_COLLECTION_PARAM, collectionName)
+      .option(SOLR_FIELD_PARAM, "userId, ts")
+      .option(SOLR_QUERY_PARAM, "userId:93")
+      .option(SORT_PARAM, "score asc")
+      .option(MAX_ROWS, "5")
+      .load()
+    val singleRow = df.take(1)(0)
+    assert(singleRow.length == 2)
+    assert(singleRow(df.schema.fieldIndex("userId")).toString.toInt == 93)
   }
 
   test("SQL fields option") {
@@ -63,6 +114,15 @@ class EventsimTestSuite extends EventsimBuilder {
     assert(df.count() == eventSimCount)
   }
 
+  test("count query with select") {
+    val df: DataFrame = sparkSession.read.format("solr")
+        .option("zkHost", zkHost)
+        .option("collection", collectionName)
+        .option("request_handler", "/select")
+        .load()
+    assert(df.count() == eventSimCount)
+  }
+
   test("count query with custom accumulator name") {
     val acc_name = "custom_acc_name_records_read"
     val df: DataFrame = sparkSession.read.format("solr")
@@ -71,7 +131,9 @@ class EventsimTestSuite extends EventsimBuilder {
       .option(ACCUMULATOR_NAME, acc_name)
       .load()
     assert(df.count() == eventSimCount)
-    val acc = SparkInternalObjects.getAccumulatorByName(acc_name)
+    val acc_id: Option[Long] = SparkSolrAccumulatorContext.getId(acc_name)
+    assert(acc_id.isDefined)
+    val acc = SparkInternalObjects.getAccumulatorById(acc_id.get)
     assert(acc.isDefined)
     assert(acc.get.value == eventSimCount)
   }
@@ -83,8 +145,7 @@ class EventsimTestSuite extends EventsimBuilder {
       SOLR_DO_SPLITS -> "true"
     )
     val df: DataFrame = sparkSession.read.format("solr").options(options).load()
-    assert(df.rdd.getNumPartitions > numShards)
-    assert(df.rdd.getNumPartitions == 8)
+    assert(df.rdd.getNumPartitions == numShards)
   }
 
   test("SQL query splits with export handler") {
@@ -139,7 +200,7 @@ class EventsimTestSuite extends EventsimBuilder {
       SOLR_COLLECTION_PARAM -> collectionName,
       SOLR_FIELD_PARAM -> "id,registration",
       SOLR_FILTERS_PARAM -> "lastName:Powell",
-      ARBITRARY_PARAMS_STRING -> "fq=artist:Interpol&defType=edismax&df=id"
+      ARBITRARY_PARAMS_STRING -> "fq=artist:Interpol"
     )
     val df = sparkSession.read.format("solr").options(options).load()
     val count = df.count()
@@ -198,6 +259,52 @@ class EventsimTestSuite extends EventsimBuilder {
     assert(timeQueryDF.count() == 1)
   }
 
+  test("Multiple WHERE clauses") {
+    val df: DataFrame = sparkSession.read.option("zkhost", zkHost).solr(collectionName)
+    df.createOrReplaceTempView("events")
+
+    val timeQueryDF = sparkSession.sql("SELECT * from events WHERE `status` == 200 OR `status` == 404 or `status` == 300 or `status` == 400")
+    assert(timeQueryDF.count() == 987)
+  }
+
+  test("Nested SQL Filter queries with OR/AND") {
+    val df: DataFrame = sparkSession.read.option("zkhost", zkHost).solr(collectionName)
+    df.createOrReplaceTempView("events")
+
+    val sqlQuery =
+      """
+        | SELECT userId, sessionId, page, lastName, firstName, method, level, gender, artist
+        |   FROM events
+        | WHERE page IN ('NextSong')
+        |       AND (
+        |         (gender = 'F' AND artist = 'Bernadette Peters')
+        |         OR
+        |         (gender = 'M' AND artist = 'Girl Talk')
+        |       )
+      """.stripMargin
+    val queryResults = sparkSession.sql(sqlQuery).collectAsList()
+    assert(queryResults.size == 3)
+  }
+
+  test("Nested SQL Filter queries with And/OR") {
+    val df: DataFrame = sparkSession.read.option("zkhost", zkHost).solr(collectionName)
+    df.createOrReplaceTempView("events")
+
+    val sqlQuery =
+      """
+        | SELECT userId, sessionId, page, lastName, firstName, method, level, gender, artist
+        |   FROM events
+        | WHERE page IN ('NextSong')
+        |       AND (
+        |         (method = 'PUT' OR method = 'GET')
+        |         AND
+        |         (artist = 'Gorillaz' OR artist = 'Girl Talk')
+        |       )
+      """.stripMargin
+    val queryResults = sparkSession.sql(sqlQuery).collectAsList()
+    assert(queryResults.size == 4)
+  }
+
   // Ignored since Spark is not passing timestamps filters to the buildScan method. Range timestamp filtering is being done at Spark layer
   ignore("Timestamp range filter queries") {
     val df: DataFrame = sparkSession.read.format("solr")
@@ -248,6 +355,18 @@ class EventsimTestSuite extends EventsimBuilder {
     assert(values(0)(0) == 3)
   }
 
+  test("Test if * in field config works") {
+    val options = Map(
+      SOLR_ZK_HOST_PARAM -> zkHost,
+      SOLR_COLLECTION_PARAM -> collectionName,
+      SOLR_FIELD_PARAM -> "*"
+    )
+    val solrRelation = new SolrRelation(options, None, sparkSession)
+    assert(solrRelation.conf.getFields.isEmpty)
+    assert(solrRelation.initialQuery.getFields === null)
+    assert(solrRelation.schema.nonEmpty)
+  }
+
   test("Test if auto check streaming feature works") {
     val options = Map(
       SOLR_ZK_HOST_PARAM -> zkHost,
@@ -266,7 +385,20 @@ class EventsimTestSuite extends EventsimBuilder {
 
     solrRelation.initialQuery.setSorts(Collections.emptyList())
     SolrRelation.addSortField(solrRelation.baseSchema.get, querySchema, solrRelation.initialQuery, solrRelation.uniqueKey)
-    assert(solrRelation.initialQuery.getSorts == Collections.singletonList(new SortClause(solrRelation.uniqueKey, SolrQuery.ORDER.asc)))
+    assert(solrRelation.initialQuery.getSorts == Collections.singletonList(new SortClause("_version_", SolrQuery.ORDER.asc)))
+  }
+
+  test("Test dynamic extensions") {
+    val options = Map(
+      SOLR_ZK_HOST_PARAM -> zkHost,
+      SOLR_COLLECTION_PARAM -> collectionName
+    )
+    val solrRelation = new SolrRelation(options, None, sparkSession)
+    val suffixes = solrRelation.dynamicSuffixes
+    assert(suffixes.contains("s_"))
+    assert(suffixes.contains("random_"))
+    assert(suffixes.contains("_l"))
+    assert(suffixes.contains("_dpf"))
   }
 
   test("Get documents with max_rows config") {

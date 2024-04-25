@@ -41,7 +41,7 @@ public class SolrRDDTest extends RDDProcessorTestBase {
     cloudSolrServer.request(request);
 
     Aliases aliases = cloudSolrServer.getZkStateReader().getAliases();
-    assertEquals(createAliasCollectionsList, aliases.getCollectionAlias(aliasName));
+    assertEquals(createAliasCollectionsList, aliases.getCollectionAliasMap().get(aliasName));
 
     // ok, alias is setup ... now fire a query against it
     long expectedNumDocs = 6;

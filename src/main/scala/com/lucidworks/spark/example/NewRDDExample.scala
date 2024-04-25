@@ -1,14 +1,13 @@
 package com.lucidworks.spark.example
 
-import com.lucidworks.spark.SparkApp
+import com.lucidworks.spark.{LazyLogging, SparkApp}
 import com.lucidworks.spark.rdd.SelectSolrRDD
 import com.lucidworks.spark.util.SolrSupport
-import com.typesafe.scalalogging.LazyLogging
 import org.apache.commons.cli.{CommandLine, Option}
 import org.apache.solr.client.solrj.request.CollectionAdminRequest
 import org.apache.spark.{SparkConf, SparkContext}
 
-class NewRDDExample extends SparkApp.RDDProcessor with LazyLogging{
+class NewRDDExample extends SparkApp.RDDProcessor with LazyLogging {
 
   override def getName: String = "new-rdd-example"
 
@@ -24,8 +23,7 @@ class NewRDDExample extends SparkApp.RDDProcessor with LazyLogging{
     // IMPORTANT: reload the collection to flush caches
     println(s"\nReloading collection $collection to flush caches!\n")
     val cloudSolrClient = SolrSupport.getCachedCloudClient(zkHost)
-    val req = new CollectionAdminRequest.Reload()
-    req.setCollectionName(collection)
+    val req = CollectionAdminRequest.reloadCollection(collection)
     cloudSolrClient.request(req)
 
     val sc = new SparkContext(conf)

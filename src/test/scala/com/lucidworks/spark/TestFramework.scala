@@ -5,7 +5,6 @@ import java.util.UUID
 
 import com.lucidworks.spark.example.ml.DateConverter
 import com.lucidworks.spark.util.{EventsimUtil, SolrCloudUtil, SolrSupport}
-import com.typesafe.scalalogging.LazyLogging
 import org.apache.commons.io.FileUtils
 import org.apache.solr.client.solrj.impl.CloudSolrClient
 import org.apache.solr.cloud.MiniSolrCloudCluster
@@ -14,8 +13,7 @@ import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions.udf
 import org.eclipse.jetty.servlet.ServletHolder
 import org.junit.Assert._
-import org.restlet.ext.servlet.ServerServlet
-import org.scalatest.{BeforeAndAfterAll, Suite}
+import org.scalatest.{BeforeAndAfterAll, BeforeAndAfterEach, Suite}
 
 trait SolrCloudTestBuilder extends BeforeAndAfterAll with LazyLogging { this: Suite =>
 
@@ -26,6 +24,8 @@ trait SolrCloudTestBuilder extends BeforeAndAfterAll with LazyLogging { this: Su
 
   override def beforeAll(): Unit = {
     super.beforeAll()
+
+    System.setProperty("jetty.testMode", "true")
     val solrXml = new File("src/test/resources/solr.xml")
     val solrXmlContents: String = TestSolrCloudClusterSupport.readSolrXml(solrXml)
 
@@ -40,13 +40,9 @@ trait SolrCloudTestBuilder extends BeforeAndAfterAll with LazyLogging { this: Su
     // need the schema stuff
     val extraServlets: java.util.SortedMap[ServletHolder, String] = new java.util.TreeMap[ServletHolder, String]()
 
-    val solrSchemaRestApi : ServletHolder = new ServletHolder("SolrSchemaRestApi", classOf[ServerServlet])
-    solrSchemaRestApi.setInitParameter("org.restlet.application", "org.apache.solr.rest.SolrSchemaRestApi")
-    extraServlets.put(solrSchemaRestApi, "/schema/*")
-
     cluster = new MiniSolrCloudCluster(1, null /* hostContext */,
       testWorkingDir.toPath, solrXmlContents, extraServlets, null /* extra filters */)
-    cloudClient = new CloudSolrClient(cluster.getZkServer.getZkAddress, true)
+    cloudClient = cluster.getSolrClient
     cloudClient.connect()
 
     assertTrue(!cloudClient.getZkStateReader.getClusterState.getLiveNodes.isEmpty)
@@ -84,7 +80,12 @@ trait SparkSolrContextBuilder extends BeforeAndAfterAll { this: Suite =>
   }
 
   override def afterAll(): Unit = {
-    sparkSession.stop()
+    try {
+      sparkSession.stop()
+    } finally {
+      SparkSession.clearDefaultSession()
+      SparkSession.clearActiveSession()
+    }
     super.afterAll()
   }
 }
@@ -116,18 +117,24 @@ trait EventsimBuilder extends TestSuiteBuilder {
   def numShards: Int = 2
 }
 
-trait MovielensBuilder extends TestSuiteBuilder {
+trait MovielensBuilder extends TestSuiteBuilder with BeforeAndAfterAll with BeforeAndAfterEach {
 
-  val moviesColName: String = "movielens_movies"
-  val ratingsColName: String = "movielens_ratings"
-  val userColName: String = "movielens_users"
+  val uuid = UUID.randomUUID().toString.replace("-", "_")
+  val moviesColName: String = s"movielens_movies_$uuid"
+  val ratingsColName: String = s"movielens_ratings_$uuid"
+  val userColName: String = s"movielens_users_$uuid"
 
   override def beforeAll(): Unit = {
     super.beforeAll()
     createCollections()
-    MovieLensUtil.indexMovieLensDataset(sparkSession, zkHost)
+    MovieLensUtil.indexMovieLensDataset(sparkSession, zkHost, uuid)
     SolrSupport.getCachedCloudClient(zkHost).commit(moviesColName)
     SolrSupport.getCachedCloudClient(zkHost).commit(ratingsColName)
+    val opts = Map(
+      "zkhost" -> zkHost,
+      "collection" -> moviesColName)
+    val df = sparkSession.read.format("solr").options(opts).load()
+    df.createOrReplaceTempView(moviesColName)
   }
 
   override def afterAll(): Unit = {
@@ -151,12 +158,12 @@ trait MovielensBuilder extends TestSuiteBuilder {
 object MovieLensUtil {
   val dataDir: String = "src/test/resources/ml-100k"
 
-  def indexMovieLensDataset(sparkSession: SparkSession, zkhost: String): Unit = {
+  def indexMovieLensDataset(sparkSession: SparkSession, zkhost: String, uuid: String): Unit = {
     //    val userDF = sqlContext.read.json(dataDir + "/movielens_users.json")
     //    userDF.write.format("solr").options(Map("zkhost" -> zkhost, "collection" -> "movielens_users", "batch_size" -> "10000")).save
 
     val moviesDF = sparkSession.read.json(dataDir + "/movielens_movies.json")
-    moviesDF.write.format("solr").options(Map("zkhost" -> zkhost, "collection" -> "movielens_movies", "batch_size" -> "10000")).save
+    moviesDF.write.format("solr").options(Map("zkhost" -> zkhost, "collection" -> s"movielens_movies_$uuid", "batch_size" -> "10000")).save
 
     val ratingsDF = sparkSession.read.json(dataDir + "/movielens_ratings_10k.json")
     val dateUDF = udf(DateConverter.toISO8601(_: String))
@@ -167,7 +174,7 @@ object MovieLensUtil {
       .limit(10000)
       .write
       .format("solr")
-      .options(Map("zkhost" -> zkhost, "collection" -> "movielens_ratings", "batch_size" -> "10000"))
+      .options(Map("zkhost" -> zkhost, "collection" -> s"movielens_ratings_$uuid", "batch_size" -> "10000"))
       .save
   }
 }

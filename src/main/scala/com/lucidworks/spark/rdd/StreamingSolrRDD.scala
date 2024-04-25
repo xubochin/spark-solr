@@ -3,11 +3,10 @@ package com.lucidworks.spark.rdd
 import com.lucidworks.spark.query.{SolrStreamIterator, StreamingExpressionResultIterator, TupleStreamIterator}
 import com.lucidworks.spark.util.QueryConstants._
 import com.lucidworks.spark.util.{SolrQuerySupport, SolrSupport}
-import com.lucidworks.spark.{CloudStreamPartition, ExportHandlerPartition, SolrPartitioner, SparkSolrAccumulator}
-import com.typesafe.scalalogging.LazyLogging
+import com.lucidworks.spark._
 import org.apache.solr.client.solrj.SolrQuery
+import org.apache.solr.common.params.ShardParams
 import org.apache.spark.annotation.DeveloperApi
-import org.apache.spark.util.TaskCompletionListener
 import org.apache.spark.{Partition, SparkContext, TaskContext}
 
 import scala.collection.JavaConverters
@@ -21,7 +20,7 @@ class StreamingSolrRDD(
     fields: Option[Array[String]] = None,
     rows: Option[Int] = Option(DEFAULT_PAGE_SIZE),
     splitField: Option[String] = None,
-    splitsPerShard: Option[Int] = None,
+    splitsPerShard: Option[Int] = Some(1),
     solrQuery: Option[SolrQuery] = None,
     uKey: Option[String] = None,
     val accumulator: Option[SparkSolrAccumulator] = None)
@@ -91,7 +90,7 @@ class StreamingSolrRDD(
         query.setRequestHandler(solrRequestHandler)
         logger.debug(s"Using export handler to fetch documents from ${partition.preferredReplica} for query: ${partition.query}")
         val resultsIterator = getExportHandlerBasedIterator(url, query, partition.numWorkers, partition.workerId)
-        context.addTaskCompletionListener { (context) =>
+        context.addTaskCompletionListener[Unit] { (context) =>
           logger.info(f"Fetched ${resultsIterator.getNumDocs} rows from shard $url for partition ${split.index}")
         }
         resultsIterator
@@ -100,11 +99,6 @@ class StreamingSolrRDD(
     if (accumulator.isDefined) {
       iterator.setAccumulator(accumulator.get)
     }
-    context.addTaskCompletionListener(new TaskCompletionListener {
-      override def onTaskCompletion(context: TaskContext): Unit = {
-        logger.info("Task input metrics for records: {}", context.taskMetrics().inputMetrics.recordsRead)
-      }
-    })
     JavaConverters.asScalaIteratorConverter(iterator.iterator()).asScala
   }
 
@@ -115,15 +109,22 @@ class StreamingSolrRDD(
       logger.info(s"Using SolrCloud stream partitioning scheme to process request to $rq for collection $collection using query: $query")
       return Array(CloudStreamPartition(0, zkHost, collection, query))
     }
+    logger.info(s"Updated Solr query: ${query.toString}")
 
-    val shards = SolrSupport.buildShardList(zkHost, collection)
+    val shardsTolerant : Boolean =
+      if (query.get(ShardParams.SHARDS_TOLERANT) != null)
+        query.get(ShardParams.SHARDS_TOLERANT).toBoolean
+      else
+        false
+
+    val shards = SolrSupport.buildShardList(zkHost, collection, shardsTolerant)
     val numReplicas = shards.head.replicas.length
-    val numSplits = splitsPerShard.getOrElse(4 * numReplicas)
-    logger.info(s"Using splitField=$splitField, splitsPerShard=$splitsPerShard, and numReplicas=$numReplicas for computing partitions.")
+    val numSplits = splitsPerShard.getOrElse(calculateSplitsPerShard(query, shards.size, numReplicas, 100000))
+    logger.debug(s"Using splitField=$splitField, splitsPerShard=$splitsPerShard, and numReplicas=$numReplicas for computing partitions.")
 
     val partitions : Array[Partition] = if (numSplits > 1) {
       val splitFieldName = splitField.getOrElse(DEFAULT_SPLIT_FIELD)
-      logger.info(s"Applied $numSplits intra-shard splits on the $splitFieldName field for $collection to better utilize all active replicas. Set the 'split_field' option to override this behavior or set the 'splits_per_shard' option = 1 to disable splits per shard.")
+      logger.debug(s"Applied $numSplits intra-shard splits on the $splitFieldName field for $collection to better utilize all active replicas. Set the 'split_field' option to override this behavior or set the 'splits_per_shard' option = 1 to disable splits per shard.")
       query.set("partitionKeys", splitFieldName)
       // Workaround for SOLR-10490. TODO: Replace with SolrPartitioner#getSplitPartitions once SOLR-10490 is resolved
       SolrPartitioner.getExportHandlerPartitions(shards, query, splitFieldName, numSplits)
@@ -132,8 +133,8 @@ class StreamingSolrRDD(
       SolrPartitioner.getExportHandlerPartitions(shards, query)
     }
 
-    if (logger.underlying.isDebugEnabled) {
-      logger.debug(s"Found ${partitions.length} partitions: ${partitions.mkString(",")}")
+    if (logger.underlying.isTraceEnabled()) {
+      logger.trace(s"Found ${partitions.length} partitions: ${partitions.mkString(",")}")
     } else {
       logger.info(s"Found ${partitions.length} partitions.")
     }
@@ -160,7 +161,7 @@ class StreamingSolrRDD(
 
   override def buildQuery: SolrQuery = {
     var solrQuery : SolrQuery = SolrQuerySupport.toQuery(query.get)
-    if (!solrQuery.getFields.eq(null) && solrQuery.getFields.length > 0) {
+    if (!solrQuery.getFields.eq(null) && solrQuery.getFields.nonEmpty) {
       solrQuery = solrQuery.setFields(fields.getOrElse(Array.empty[String]):_*)
     }
     if (!solrQuery.getRows.eq(null)) {

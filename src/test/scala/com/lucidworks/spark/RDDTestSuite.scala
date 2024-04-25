@@ -6,7 +6,6 @@ import com.lucidworks.spark.rdd.{SelectSolrRDD, StreamingSolrRDD}
 import com.lucidworks.spark.util.ConfigurationConstants._
 import com.lucidworks.spark.util.QueryConstants._
 import com.lucidworks.spark.util.SolrCloudUtil
-import com.typesafe.scalalogging.LazyLogging
 import org.apache.solr.client.solrj.SolrQuery
 
 class RDDTestSuite extends TestSuiteBuilder with LazyLogging {
@@ -29,7 +28,7 @@ class RDDTestSuite extends TestSuiteBuilder with LazyLogging {
     try {
       val newRDD = new SelectSolrRDD(zkHost, collectionName, sc)
       val partitions = newRDD.partitions
-      assert(partitions.length == 16)
+      assert(partitions.length == 8)
     } finally {
       SolrCloudUtil.deleteCollection(collectionName, cluster)
     }
